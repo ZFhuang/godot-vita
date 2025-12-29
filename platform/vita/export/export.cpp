@@ -29,10 +29,10 @@
 /**************************************************************************/
 
 #include "export.h"
-#include "png_indexed.h"
 #include "core/io/image_loader.h"
 #include "core/io/zip_io.h"
 #include "core/version.h"
+#include "png_indexed.h"
 
 #define TEMPLATE_RELEASE "vita_release.zip"
 
