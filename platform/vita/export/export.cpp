@@ -29,6 +29,8 @@
 /**************************************************************************/
 
 #include "export.h"
+#include "png_indexed.h"
+#include "core/io/image_loader.h"
 #include "core/io/zip_io.h"
 #include "core/version.h"
 
@@ -78,6 +80,7 @@ public:
 		r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "assets/app_splash_960x544", PROPERTY_HINT_GLOBAL_FILE, "*.png"), ""));
 		r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "assets/livearea_bg_840x500", PROPERTY_HINT_GLOBAL_FILE, "*.png"), ""));
 		r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "assets/livearea_startup_button_280x158", PROPERTY_HINT_GLOBAL_FILE, "*.png"), ""));
+		r_options->push_back(ExportOption(PropertyInfo(Variant::BOOL, "assets/auto_convert_to_indexed_png"), true));
 	}
 
 	virtual String get_name() const {
@@ -309,18 +312,52 @@ public:
 
 		err = save_pack(p_preset, game_data_dir.plus_file("game.pck"));
 		mksfoex(sfo, app_dir.plus_file("sce_sys"));
+		bool auto_convert = p_preset->get("assets/auto_convert_to_indexed_png");
+
 		if (err == OK) {
 			if (icon != String() && FileAccess::exists(icon)) {
-				da->copy(icon, app_dir.plus_file("sce_sys/icon0.png"));
+				if (auto_convert) {
+					Ref<Image> img;
+					img.instance();
+					if (ImageLoader::load_image(icon, img) == OK) {
+						save_indexed_png_for_vita(img, app_dir.plus_file("sce_sys/icon0.png"), 128, 128);
+					}
+				} else {
+					da->copy(icon, app_dir.plus_file("sce_sys/icon0.png"));
+				}
 			}
 			if (splash != String() && FileAccess::exists(splash)) {
-				da->copy(splash, app_dir.plus_file("sce_sys/pic0.png"));
+				if (auto_convert) {
+					Ref<Image> img;
+					img.instance();
+					if (ImageLoader::load_image(splash, img) == OK) {
+						save_indexed_png_for_vita(img, app_dir.plus_file("sce_sys/pic0.png"), 960, 544);
+					}
+				} else {
+					da->copy(splash, app_dir.plus_file("sce_sys/pic0.png"));
+				}
 			}
 			if (livearea_bg != String() && FileAccess::exists(livearea_bg)) {
-				da->copy(livearea_bg, app_dir.plus_file("sce_sys/livearea/contents/bg.png"));
+				if (auto_convert) {
+					Ref<Image> img;
+					img.instance();
+					if (ImageLoader::load_image(livearea_bg, img) == OK) {
+						save_indexed_png_for_vita(img, app_dir.plus_file("sce_sys/livearea/contents/bg.png"), 840, 500);
+					}
+				} else {
+					da->copy(livearea_bg, app_dir.plus_file("sce_sys/livearea/contents/bg.png"));
+				}
 			}
 			if (livearea_startup_button != String() && FileAccess::exists(livearea_startup_button)) {
-				da->copy(livearea_startup_button, app_dir.plus_file("sce_sys/livearea/contents/startup.png"));
+				if (auto_convert) {
+					Ref<Image> img;
+					img.instance();
+					if (ImageLoader::load_image(livearea_startup_button, img) == OK) {
+						save_indexed_png_for_vita(img, app_dir.plus_file("sce_sys/livearea/contents/startup.png"), 280, 158);
+					}
+				} else {
+					da->copy(livearea_startup_button, app_dir.plus_file("sce_sys/livearea/contents/startup.png"));
+				}
 			}
 		}
 
