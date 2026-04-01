@@ -6,6 +6,7 @@ files = [
     "context_egl_vita.cpp",
     "joypad_vita.cpp",
     "audio_driver_vita.cpp",
+    "crash_handler_vita.cpp",
 ]
 
 prog = env.add_program("#temp-build/godot", files)
@@ -23,24 +24,26 @@ env.Command(
 env.VitaELF("#temp-build/vita_" + env["target"] + ".velf", stripped_elf_path)
 env.VitaEBOOT("#temp-build/eboot.bin", "#temp-build/vita_" + env["target"] + ".velf")
 
+# Map build target to template name: release_debug -> debug, release -> release, debug -> debug
+if build_target == "release":
+    template_name = "release"
+else:
+    template_name = "debug"
+
+template_dir = "#temp-build/vita_" + template_name
+template_dir_path = env.Dir(template_dir).abspath
+
+# Assemble template directory and create zip in a single command to ensure correct ordering:
+# 1. Create template directory and copy app/ assets (module/, sce_sys/)
+# 2. Copy eboot.bin AFTER app/ assets (so it won't be overwritten by directory copy)
+# 3. Create the zip from the assembled template directory
 env.Command(
-    "#temp-build/vita_release/eboot.bin",
-    "#temp-build/eboot.bin",
+    "#bin/vita_" + template_name + ".zip",
+    ["#temp-build/eboot.bin", "#platform/vita/app/"],
     [
-        Copy("$TARGET", "$SOURCE"),
-    ],
-)
-env.Command(
-    "#temp-build/vita_release/",
-    "#platform/vita/app/",
-    [
-        Copy("$TARGET", "$SOURCE"),
-    ],
-)
-env.Command(
-    "#bin/vita_release.zip",
-    "#temp-build/vita_release",
-    [
-        "cd $SOURCE && zip -r ../../$TARGET .",
+        "mkdir -p " + template_dir_path,
+        "cp -r ${SOURCES[1]}/* " + template_dir_path + "/",
+        "cp ${SOURCES[0]} " + template_dir_path + "/eboot.bin",
+        "cd " + template_dir_path + " && zip -r ${TARGET.abspath} .",
     ],
 )

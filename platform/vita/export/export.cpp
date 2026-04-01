@@ -33,6 +33,7 @@
 #include "core/version.h"
 
 #define TEMPLATE_RELEASE "vita_release.zip"
+#define TEMPLATE_DEBUG "vita_debug.zip"
 
 class ExportPluginVita : public EditorExportPlugin {
 public:
@@ -110,10 +111,20 @@ public:
 
 	virtual bool has_valid_export_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const {
 		String err;
-		r_missing_templates =
-				find_export_template(TEMPLATE_RELEASE) == String();
+		bool valid = true;
 
-		bool valid = !r_missing_templates;
+		bool dvalid = find_export_template(TEMPLATE_DEBUG) != String();
+		bool rvalid = find_export_template(TEMPLATE_RELEASE) != String();
+
+		if (!dvalid) {
+			err += TTR("Debug export template not found.") + "\n";
+		}
+		if (!rvalid) {
+			err += TTR("Release export template not found.") + "\n";
+		}
+
+		r_missing_templates = !dvalid || !rvalid;
+		valid = dvalid || rvalid;
 
 		if (!err.empty()) {
 			r_error = err;
@@ -225,8 +236,12 @@ public:
 			return ERR_FILE_BAD_PATH;
 		}
 
-		String template_path = find_export_template(TEMPLATE_RELEASE);
-		if (template_path != String() && !FileAccess::exists(template_path)) {
+		String template_path = find_export_template(p_debug ? TEMPLATE_DEBUG : TEMPLATE_RELEASE);
+		if (template_path == String()) {
+			add_message(EXPORT_MESSAGE_ERROR, TTR("Prepare Templates"), TTR("Export template not found."));
+			return ERR_FILE_NOT_FOUND;
+		}
+		if (!FileAccess::exists(template_path)) {
 			add_message(EXPORT_MESSAGE_ERROR, TTR("Prepare Templates"), vformat(TTR("Template file not found: \"%s\"."), template_path));
 			return ERR_FILE_NOT_FOUND;
 		}
@@ -249,6 +264,16 @@ public:
 
 		String cache = EditorSettings::get_singleton()->get_cache_dir();
 		String app_dir = cache.plus_file("app");
+		// Clean cache directory to ensure no stale files from previous exports
+		if (da->dir_exists(app_dir)) {
+			Error cd_err = da->change_dir(app_dir);
+			if (cd_err == OK) {
+				da->erase_contents_recursive();
+			}
+			// Change back and remove the now-empty directory
+			da->change_dir(cache);
+			da->remove(app_dir);
+		}
 		da->make_dir(app_dir);
 		String game_data_dir = app_dir.plus_file("game_data");
 		da->make_dir(game_data_dir);

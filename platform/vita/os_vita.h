@@ -34,6 +34,7 @@
 #include "audio_driver_vita.h"
 #include "context_egl_vita.h"
 #include "core/os/os.h"
+#include "crash_handler_vita.h"
 #include "drivers/dummy/texture_loader_dummy.h"
 #include "drivers/unix/os_unix.h"
 #include "joypad_vita.h"
@@ -62,6 +63,8 @@ class OS_Vita : public OS {
 
 	InputDefault *input;
 	JoypadVita *joypad;
+
+	CrashHandler crash_handler;
 
 	Vector2 last_touch_pos[SCE_TOUCH_MAX_REPORT];
 	SceTouchData touch;
@@ -144,6 +147,9 @@ public:
 	virtual Error open_dynamic_library(const String p_path, void *&p_library_handle, bool p_also_set_library_path = false);
 	virtual Error close_dynamic_library(void *p_library_handle);
 	virtual Error get_dynamic_library_symbol_handle(void *p_library_handle, const String p_name, void *&p_symbol_handle, bool p_optional = false);
+
+	void disable_crash_handler();
+	bool is_disable_crash_handler() const;
 
 	OS_Vita();
 	~OS_Vita();

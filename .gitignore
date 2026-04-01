@@ -370,3 +370,6 @@ $RECYCLE.BIN/
 *.msm
 *.msp
 *.lnk
+
+things_for_testing/
+.codebuddy/

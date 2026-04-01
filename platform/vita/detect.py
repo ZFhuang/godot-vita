@@ -130,6 +130,7 @@ def configure(env):
             env.Prepend(CCFLAGS=["-O3", "-ffast-math", "-DDEBUG_ENABLED"])
         else:  # optimize for size
             env.Prepend(CCFLAGS=["-Os", "-DDEBUG_ENABLED"])
+        env.Prepend(CCFLAGS=["-fno-omit-frame-pointer"])  # Needed for crash handler backtrace
 
         if env["debug_symbols"] == "yes":
             env.Prepend(CCFLAGS=["-g1"])
@@ -137,7 +138,7 @@ def configure(env):
             env.Prepend(CCFLAGS=["-g2"])
 
     elif env["target"] == "debug":
-        env.Prepend(CCFLAGS=["-g3", "-DDEBUG_ENABLED", "-DDEBUG_MEMORY_ENABLED"])
+        env.Prepend(CCFLAGS=["-g3", "-DDEBUG_ENABLED", "-DDEBUG_MEMORY_ENABLED", "-fno-omit-frame-pointer"])
         # env.Append(LINKFLAGS=['-rdynamic'])
 
         # env.Append(LINKFLAGS=['-rdynamic'])

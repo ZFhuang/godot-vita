@@ -74,6 +74,8 @@ void OS_Vita::initialize_core() {
 	init_thread_posix();
 #endif
 
+	crash_handler.initialize();
+
 	FileAccess::make_default<FileAccessUnix>(FileAccess::ACCESS_RESOURCES);
 	FileAccess::make_default<FileAccessUnix>(FileAccess::ACCESS_USERDATA);
 	FileAccess::make_default<FileAccessUnix>(FileAccess::ACCESS_FILESYSTEM);
@@ -729,4 +731,12 @@ uint64_t OS_Vita::get_ticks_usec() const {
 
 String OS_Vita::get_stdin_string() {
 	return "";
+}
+
+void OS_Vita::disable_crash_handler() {
+	crash_handler.disable();
+}
+
+bool OS_Vita::is_disable_crash_handler() const {
+	return crash_handler.is_disabled();
 }
