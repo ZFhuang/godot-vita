@@ -36,6 +36,7 @@ class CrashHandler {
 
 public:
 	void initialize();
+	void setup_crash_log_dir();
 
 	void disable();
 	bool is_disabled() const { return disabled; };

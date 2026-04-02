@@ -31,9 +31,7 @@
 #include "crash_handler_vita.h"
 
 #include "core/os/dir_access.h"
-#include "core/os/file_access.h"
 #include "core/os/os.h"
-#include "core/print_string.h"
 #include "core/project_settings.h"
 #include "core/version.h"
 #include "main/main.h"
@@ -45,9 +43,12 @@
 #ifdef CRASH_HANDLER_ENABLED
 #include <signal.h>
 #include <stdlib.h>
-#include <time.h>
+#include <string.h>
 
+#include <psp2/io/fcntl.h>
+#include <psp2/io/stat.h>
 #include <psp2/kernel/clib.h>
+#include <psp2/rtc.h>
 
 // Note: VitaSDK's dlfcn.h provides dlopen/dlsym/dlclose/dlerror but NOT
 // dladdr/Dl_info, so we cannot resolve addresses to symbol names at runtime.
@@ -55,6 +56,14 @@
 
 // Maximum number of stack frames to capture
 #define MAX_BACKTRACE_FRAMES 64
+
+// Re-entrancy guard to prevent recursive crashes in the signal handler
+static volatile sig_atomic_t s_crash_handler_entered = 0;
+
+// Pre-allocated crash log directory path, set during initialize()
+// so we don't need heap allocation in the signal handler.
+static char s_crash_log_dir[256] = { 0 };
+static bool s_crash_log_dir_valid = false;
 
 // Manual ARM stack unwinding via frame pointer chain.
 // PSVita (ARM Cortex-A9) does not provide execinfo.h / backtrace(),
@@ -110,133 +119,139 @@ static const char *_get_signal_name(int sig) {
 	}
 }
 
-// Helper to write crash log to file
-static void _write_crash_log_line(FileAccess *p_file, const String &p_line) {
-	if (p_file) {
-		p_file->store_string(p_line + "\n");
-		p_file->flush();
+// Async-signal-safe helper: write a C string to the crash log file descriptor.
+// Uses only sceIoWrite (low-level I/O), no heap allocation.
+static void _safe_write_line(SceUID fd, const char *line) {
+	if (fd < 0 || !line) {
+		return;
 	}
+	int len = 0;
+	while (line[len] != '\0') {
+		len++;
+	}
+	if (len > 0) {
+		sceIoWrite(fd, line, len);
+	}
+	sceIoWrite(fd, "\n", 1);
+}
+
+// Async-signal-safe helper: write to both sceClibPrintf (console) and file.
+static void _safe_log(SceUID fd, const char *line) {
+	sceClibPrintf("%s\n", line);
+	_safe_write_line(fd, line);
 }
 
 static void handle_crash(int sig) {
-	if (OS::get_singleton() == nullptr) {
-		abort();
+	// Re-entrancy guard: if we crash again inside the handler, just die immediately.
+	if (s_crash_handler_entered) {
+		_Exit(128 + sig);
 	}
+	s_crash_handler_entered = 1;
 
-	// Open crash log file
-	FileAccess *crash_log = nullptr;
-	String crash_log_path;
-	{
-		// Use user data directory for crash logs
-		String user_dir = OS::get_singleton()->get_user_data_dir();
-		if (!user_dir.empty()) {
-			// Ensure logs directory exists
-			DirAccess *dir = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
-			if (dir) {
-				dir->make_dir_recursive(user_dir.plus_file("logs"));
-				memdelete(dir);
-			}
+	// Block all crash signals to prevent recursive signal delivery
+	signal(SIGSEGV, SIG_DFL);
+	signal(SIGFPE, SIG_DFL);
+	signal(SIGILL, SIG_DFL);
+	signal(SIGABRT, SIG_DFL);
+	signal(SIGBUS, SIG_DFL);
 
-			// Create crash log filename with timestamp
-			time_t now = time(nullptr);
-			struct tm *timeinfo = localtime(&now);
-			char timestamp[32];
-			strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", timeinfo);
+	// All operations below use only stack-allocated buffers and low-level
+	// VitaSDK syscalls to remain async-signal-safe. No Godot String,
+	// FileAccess, DirAccess, or any heap-allocating API is used.
 
-			crash_log_path = user_dir.plus_file("logs").plus_file(vformat("crash_%s.log", timestamp));
-			crash_log = FileAccess::open(crash_log_path, FileAccess::WRITE);
+	char buf[512];
+
+	// Open crash log file using low-level I/O (no heap allocation)
+	SceUID crash_fd = -1;
+	char crash_log_path[256] = { 0 };
+
+	if (s_crash_log_dir_valid) {
+		// Ensure logs directory exists (sceIoMkdir is safe, ignores if exists)
+		sceIoMkdir(s_crash_log_dir, 0777);
+
+		// Get timestamp using sceRtcGetCurrentClockLocalTime (no heap allocation)
+		SceDateTime dt;
+		sceClibMemset(&dt, 0, sizeof(dt));
+		if (sceRtcGetCurrentClockLocalTime(&dt) < 0) {
+			// Fallback: use zeros if RTC fails
+			dt.year = 0;
+			dt.month = 0;
+			dt.day = 0;
+			dt.hour = 0;
+			dt.minute = 0;
+			dt.second = 0;
 		}
+
+		sceClibSnprintf(crash_log_path, sizeof(crash_log_path),
+				"%s/crash_%04d%02d%02d_%02d%02d%02d.log",
+				s_crash_log_dir,
+				dt.year, dt.month, dt.day,
+				dt.hour, dt.minute, dt.second);
+
+		crash_fd = sceIoOpen(crash_log_path,
+				SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
 	}
 
+	// Capture backtrace before doing anything else
 	void *bt_buffer[MAX_BACKTRACE_FRAMES];
 	int size = vita_backtrace(bt_buffer, MAX_BACKTRACE_FRAMES);
 
-	String msg;
-	const ProjectSettings *proj_settings = ProjectSettings::get_singleton();
-	if (proj_settings) {
-		msg = proj_settings->get("debug/settings/crash_handler/message");
-	}
-
-	// Tell MainLoop about the crash. This can be handled by users too in Node.
-	if (OS::get_singleton()->get_main_loop()) {
+	// Notify MainLoop about the crash (this is the only Godot API call we keep,
+	// as it's important for user-side crash handling in Node scripts).
+	if (OS::get_singleton() && OS::get_singleton()->get_main_loop()) {
 		OS::get_singleton()->get_main_loop()->notification(MainLoop::NOTIFICATION_CRASH);
 	}
 
-	// Dump the backtrace to stderr with a message to the user
-	// Use sceClibPrintf as a fallback in case print_error has issues during crash
-	sceClibPrintf("\n================================================================\n");
-	sceClibPrintf("CRASH: Program crashed with signal %d - %s\n", sig, _get_signal_name(sig));
+	// Output crash information
+	const char *separator = "================================================================";
+	_safe_log(crash_fd, separator);
 
-	String separator = "================================================================";
-	String crash_header = vformat("CRASH: Program crashed with signal %d - %s", sig, _get_signal_name(sig));
+	sceClibSnprintf(buf, sizeof(buf), "CRASH: Program crashed with signal %d - %s",
+			sig, _get_signal_name(sig));
+	_safe_log(crash_fd, buf);
 
-	print_error("\n" + separator);
-	_write_crash_log_line(crash_log, separator);
-
-	print_error(vformat("%s: %s", __FUNCTION__, crash_header));
-	_write_crash_log_line(crash_log, crash_header);
-
-	// Print the engine version
-	String version_str;
-	if (String(VERSION_HASH).empty()) {
-		version_str = vformat("Engine version: %s", VERSION_FULL_NAME);
+	// Engine version
+	if (VERSION_HASH && VERSION_HASH[0] != '\0') {
+		sceClibSnprintf(buf, sizeof(buf), "Engine version: %s (%s)",
+				VERSION_FULL_NAME, VERSION_HASH);
 	} else {
-		version_str = vformat("Engine version: %s (%s)", VERSION_FULL_NAME, VERSION_HASH);
+		sceClibSnprintf(buf, sizeof(buf), "Engine version: %s", VERSION_FULL_NAME);
 	}
-	print_error(version_str);
-	_write_crash_log_line(crash_log, version_str);
+	_safe_log(crash_fd, buf);
 
-	String dump_msg = vformat("Dumping the backtrace. %s", msg);
-	print_error(dump_msg);
-	_write_crash_log_line(crash_log, dump_msg);
+	_safe_log(crash_fd, "Dumping the backtrace.");
 
 	if (size > 0) {
 		for (int i = 0; i < size; i++) {
-			// VitaSDK lacks dladdr/Dl_info, so we output raw addresses only.
-			// Use arm-vita-eabi-addr2line -e <elf> -f -C <addresses> to resolve symbols offline.
-			sceClibPrintf("[%d] [%p]\n", i, bt_buffer[i]);
-			String bt_line = vformat("[%d] [0x%x]", (int64_t)i, (int64_t)(uintptr_t)bt_buffer[i]);
-			print_error(bt_line);
-			_write_crash_log_line(crash_log, bt_line);
+			sceClibSnprintf(buf, sizeof(buf), "[%d] [0x%08x]",
+					i, (unsigned int)(uintptr_t)bt_buffer[i]);
+			_safe_log(crash_fd, buf);
 		}
-		String hint = "Hint: Use arm-vita-eabi-addr2line -e <elf> -f -C <addresses> to resolve symbols.";
-		print_error(hint);
-		_write_crash_log_line(crash_log, hint);
-		sceClibPrintf("Hint: Use arm-vita-eabi-addr2line -e <elf> -f -C <addresses> to resolve symbols.\n");
+		_safe_log(crash_fd,
+				"Hint: Use arm-vita-eabi-addr2line -e <elf> -f -C <addresses> to resolve symbols.");
 	} else {
-		String no_bt = "No backtrace frames could be captured.";
-		String hint = "Hint: Ensure the build uses -fno-omit-frame-pointer for better stack traces.";
-		print_error(no_bt);
-		print_error(hint);
-		_write_crash_log_line(crash_log, no_bt);
-		_write_crash_log_line(crash_log, hint);
-		sceClibPrintf("No backtrace frames could be captured.\n");
+		_safe_log(crash_fd, "No backtrace frames could be captured.");
+		_safe_log(crash_fd,
+				"Hint: Ensure the build uses -fno-omit-frame-pointer for better stack traces.");
 	}
 
-	String end_marker = "-- END OF BACKTRACE --";
-	print_error(end_marker);
-	print_error(separator);
-	_write_crash_log_line(crash_log, end_marker);
-	_write_crash_log_line(crash_log, separator);
+	_safe_log(crash_fd, "-- END OF BACKTRACE --");
 
-	// Write crash log path to console
-	if (!crash_log_path.empty()) {
-		String saved_msg = vformat("Crash log saved to: %s", crash_log_path);
-		print_error(saved_msg);
-		sceClibPrintf("%s\n", saved_msg.utf8().get_data());
-		_write_crash_log_line(crash_log, saved_msg);
+	// Write crash log path
+	if (crash_fd >= 0 && crash_log_path[0] != '\0') {
+		sceClibSnprintf(buf, sizeof(buf), "Crash log saved to: %s", crash_log_path);
+		_safe_log(crash_fd, buf);
 	}
 
-	sceClibPrintf("-- END OF BACKTRACE --\n");
-	sceClibPrintf("================================================================\n");
+	_safe_log(crash_fd, separator);
 
 	// Close crash log file
-	if (crash_log) {
-		memdelete(crash_log);
+	if (crash_fd >= 0) {
+		sceIoClose(crash_fd);
 	}
 
-	// Abort to pass the error to the OS
-	abort();
+	// Use _Exit() instead of abort() to avoid triggering SIGABRT recursion
+	_Exit(128 + sig);
 }
 #endif
 
@@ -254,11 +269,11 @@ void CrashHandler::disable() {
 	}
 
 #ifdef CRASH_HANDLER_ENABLED
-	signal(SIGSEGV, nullptr);
-	signal(SIGFPE, nullptr);
-	signal(SIGILL, nullptr);
-	signal(SIGABRT, nullptr);
-	signal(SIGBUS, nullptr);
+	signal(SIGSEGV, SIG_DFL);
+	signal(SIGFPE, SIG_DFL);
+	signal(SIGILL, SIG_DFL);
+	signal(SIGABRT, SIG_DFL);
+	signal(SIGBUS, SIG_DFL);
 #endif
 
 	disabled = true;
@@ -266,10 +281,48 @@ void CrashHandler::disable() {
 
 void CrashHandler::initialize() {
 #ifdef CRASH_HANDLER_ENABLED
+	// Use a hardcoded default crash log directory.
+	// At this point in the boot sequence, ProjectSettings is NOT yet initialized
+	// (initialize_core() is called before memnew(ProjectSettings) in Main::setup()),
+	// so we cannot call get_user_data_dir() which depends on ProjectSettings.
+	// Use a safe default path that doesn't require any Godot singletons.
+	strncpy(s_crash_log_dir, "ux0:/data/godot_vita/logs", sizeof(s_crash_log_dir) - 1);
+	s_crash_log_dir[sizeof(s_crash_log_dir) - 1] = '\0';
+	s_crash_log_dir_valid = true;
+
+	// Pre-create the default logs directory using low-level API
+	sceIoMkdir("ux0:/data/godot_vita", 0777);
+	sceIoMkdir("ux0:/data/godot_vita/logs", 0777);
+
 	signal(SIGSEGV, handle_crash);
 	signal(SIGFPE, handle_crash);
 	signal(SIGILL, handle_crash);
 	signal(SIGABRT, handle_crash);
 	signal(SIGBUS, handle_crash);
+#endif
+}
+
+void CrashHandler::setup_crash_log_dir() {
+#ifdef CRASH_HANDLER_ENABLED
+	// Called after ProjectSettings is initialized, so we can now resolve
+	// the proper user data directory for crash logs.
+	if (OS::get_singleton()) {
+		String user_dir = OS::get_singleton()->get_user_data_dir();
+		if (!user_dir.empty()) {
+			String logs_dir = user_dir.plus_file("logs");
+			if (logs_dir.utf8().length() < (int)sizeof(s_crash_log_dir)) {
+				strncpy(s_crash_log_dir, logs_dir.utf8().get_data(), sizeof(s_crash_log_dir) - 1);
+				s_crash_log_dir[sizeof(s_crash_log_dir) - 1] = '\0';
+				s_crash_log_dir_valid = true;
+
+				// Pre-create the logs directory
+				DirAccess *dir = DirAccess::create(DirAccess::ACCESS_FILESYSTEM);
+				if (dir) {
+					dir->make_dir_recursive(logs_dir);
+					memdelete(dir);
+				}
+			}
+		}
+	}
 #endif
 }

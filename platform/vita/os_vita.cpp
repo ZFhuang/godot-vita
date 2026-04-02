@@ -102,6 +102,10 @@ int OS_Vita::get_current_video_driver() const {
 }
 
 Error OS_Vita::initialize(const VideoMode &p_desired, int p_video_driver, int p_audio_driver) {
+	// Update crash log directory now that ProjectSettings is available.
+	// (initialize() is called after ProjectSettings is created in Main::setup())
+	crash_handler.setup_crash_log_dir();
+
 	bool gl_initialization_error = false;
 	bool gles2 = false;
 	gl_context = NULL;
