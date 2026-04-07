@@ -21,7 +21,7 @@ echo "Build mode: $BUILD_MODE"
 # =============================================================================
 if [ "$BUILD_MODE" = "full" ]; then
     echo "=== Building release export template ==="
-    scons platform=vita target=release tools=no verbose=yes warnings=all werror=no debug_symbols=no
+    scons platform=vita target=release tools=no verbose=no warnings=no werror=no debug_symbols=no
     # Verify release zip was generated before cleaning
     if [ ! -f "bin/vita_release.zip" ]; then
         echo "ERROR: bin/vita_release.zip not found, release build may have failed."
@@ -42,7 +42,7 @@ fi
 # Build debug export template (always built)
 # =============================================================================
 echo "=== Building debug export template ==="
-scons platform=vita target=release_debug tools=no verbose=yes warnings=all werror=no debug_symbols=no
+scons platform=vita target=release_debug tools=no verbose=no warnings=all werror=no debug_symbols=yes
 # Verify debug zip was generated before cleaning
 if [ ! -f "bin/vita_debug.zip" ]; then
     echo "ERROR: bin/vita_debug.zip not found, debug build may have failed."

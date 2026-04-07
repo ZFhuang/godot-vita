@@ -24,6 +24,7 @@ Example:
 """
 
 import gzip
+import re
 import struct
 import subprocess
 import sys
@@ -274,6 +275,7 @@ class ElfParser:
         self.no_disasm = no_disasm
         self.rx_vaddr = -1
         self.a2l = None
+        self._a2l_cache = {}
 
         with open(filename, "rb") as f:
             elf = ELFFile(f)
@@ -303,20 +305,23 @@ class ElfParser:
             self.a2l = None
 
     def addr2line(self, addr):
-        """Resolve an offset in the executable segment to a source location."""
+        """Resolve an offset in the executable segment to a source location.
+        Results are cached to avoid redundant subprocess calls for the same address.
+        """
         if not self.a2l:
             return None
-        addr += self.rx_vaddr
+        if addr in self._a2l_cache:
+            return self._a2l_cache[addr]
+        real_addr = addr + self.rx_vaddr
         try:
-            self.a2l.stdin.write(f"{hex(addr)}\n".encode())
+            self.a2l.stdin.write(f"{hex(real_addr)}\n".encode())
             self.a2l.stdin.flush()
             out = self.a2l.stdout.readline()
-            result = out.decode().strip()
-            if result and "??" not in result:
-                return result
-            return result  # Return even "??" results for completeness
+            result = out.decode().strip() or None
         except (BrokenPipeError, OSError):
-            return None
+            result = None
+        self._a2l_cache[addr] = result
+        return result
 
     def disas_around_addr(self, addr):
         """Disassemble code around the given offset in the executable segment."""
@@ -391,17 +396,15 @@ class CoreParser:
 
     def __init__(self, filename):
         f = None
-        try:
+        # Detect gzip by magic bytes (\x1f\x8b) instead of relying on exceptions,
+        # which is more reliable and avoids Python version differences.
+        with open(filename, "rb") as probe:
+            is_gzip = probe.read(2) == b'\x1f\x8b'
+        if is_gzip:
             f = gzip.open(filename, "rb")
-            # Try reading a byte to check if it's actually gzipped
-            f.read(1)
-            f.seek(0)
-            self.elf = ELFFile(f)
-        except (gzip.BadGzipFile, OSError):
-            if f:
-                f.close()
+        else:
             f = open(filename, "rb")
-            self.elf = ELFFile(f)
+        self.elf = ELFFile(f)
 
         self._file = f
         self.notes = {}
@@ -489,13 +492,11 @@ class CoreParser:
 
     def is_code_address(self, addr):
         """Check if an address falls within any executable (RX) segment.
-        Returns (module, segment, offset) tuple or None."""
+        Returns (module, segment, offset) tuple or None.
+        Thumb bit is cleared before lookup to handle Thumb function pointers.
+        """
         if not hasattr(self, '_rx_ranges'):
             self._build_rx_ranges()
-        for start, end, module, segment in self._rx_ranges:
-            if start <= addr < end:
-                return (module, segment, addr - start)
-        # Also check addr with Thumb bit cleared
         addr_clean = addr & ~1
         for start, end, module, segment in self._rx_ranges:
             if start <= addr_clean < end:
@@ -563,12 +564,16 @@ def print_thread_info(core, thread, elf=None):
             iprint(lr.to_string(elf))
 
 
+# Matches compiler-generated data labels: .LC0, .LANCHOR1, etc.
+# Deliberately avoids matching .Lfunc_begin / .Ltext0 which are valid code labels.
+_DATA_LABEL_RE = re.compile(r'\.(LC|LANCHOR)\d+')
+
 def _is_likely_return_addr(offset, elf):
     """Heuristic check: is this address likely a return address (i.e. instruction
     after a BL/BLX call) rather than a data pointer or function pointer?
 
     We check the addr2line result to filter out obvious non-code entries like
-    data labels (.LC*), string literals, and anchors (.LANCHOR*).
+    data labels (.LC*) and anchors (.LANCHOR*).
     """
     if not elf:
         return True  # Can't filter without addr2line, assume it's valid
@@ -577,11 +582,9 @@ def _is_likely_return_addr(offset, elf):
     if not a2l_result:
         return True  # No info, keep it
 
-    # Filter out data labels that addr2line resolves to
-    # These are typically .LC*, .LANCHOR*, .L* (compiler-generated data labels)
-    for pattern in [".LC", ".LANCHOR", ".L "]:
-        if pattern in a2l_result:
-            return False
+    # Filter out compiler-generated data labels (.LC0, .LANCHOR1, etc.)
+    if _DATA_LABEL_RE.search(a2l_result):
+        return False
 
     return True
 
