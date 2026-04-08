@@ -46,24 +46,31 @@ except ImportError:
 
 USE_COLOR = True
 
+
 def set_color(enabled):
     global USE_COLOR
     USE_COLOR = enabled
 
+
 def red(s):
     return f"\033[91m{s}\033[0m" if USE_COLOR else s
+
 
 def green(s):
     return f"\033[92m{s}\033[0m" if USE_COLOR else s
 
+
 def yellow(s):
     return f"\033[93m{s}\033[0m" if USE_COLOR else s
+
 
 def cyan(s):
     return f"\033[96m{s}\033[0m" if USE_COLOR else s
 
+
 def dim(s):
     return f"\033[90m{s}\033[0m" if USE_COLOR else s
+
 
 def bold(s):
     return f"\033[1m{s}\033[0m" if USE_COLOR else s
@@ -76,8 +83,10 @@ def bold(s):
 _indent_level = 0
 _indent_width = 4
 
+
 class indent:
     """Context manager for indented output."""
+
     def __enter__(self):
         global _indent_level
         _indent_level += _indent_width
@@ -85,6 +94,7 @@ class indent:
     def __exit__(self, *args):
         global _indent_level
         _indent_level -= _indent_width
+
 
 def iprint(s=""):
     """Print with current indentation level."""
@@ -95,13 +105,16 @@ def iprint(s=""):
 # Binary parsing helpers
 # =============================================================================
 
+
 def u16(buf, off):
     """Read a little-endian uint16 from buffer at offset."""
-    return struct.unpack("<H", buf[off:off+2])[0]
+    return struct.unpack("<H", buf[off : off + 2])[0]
+
 
 def u32(buf, off):
     """Read a little-endian uint32 from buffer at offset."""
-    return struct.unpack("<I", buf[off:off+4])[0]
+    return struct.unpack("<I", buf[off : off + 4])[0]
+
 
 def c_str(buf, off):
     """Read a null-terminated C string from buffer at offset."""
@@ -113,7 +126,7 @@ def c_str(buf, off):
                 break
             out.append(chr(ch))
         else:
-            if ch == '\0' or ch == b'\0':
+            if ch == "\0" or ch == b"\0":
                 break
             out.append(ch if isinstance(ch, str) else chr(ch))
         off += 1
@@ -124,24 +137,33 @@ def c_str(buf, off):
 # String lookup tables
 # =============================================================================
 
-STR_STOP_REASON = defaultdict(lambda: "Unknown", {
-    0x00000: "No reason",
-    0x30002: "Undefined instruction exception",
-    0x30003: "Prefetch abort exception",
-    0x30004: "Data abort exception",
-    0x60080: "Division by zero",
-})
+STR_STOP_REASON = defaultdict(
+    lambda: "Unknown",
+    {
+        0x00000: "No reason",
+        0x30002: "Undefined instruction exception",
+        0x30003: "Prefetch abort exception",
+        0x30004: "Data abort exception",
+        0x60080: "Division by zero",
+    },
+)
 
-STR_STATUS = defaultdict(lambda: "Unknown", {
-    1: "Running",
-    8: "Waiting",
-    16: "Not started",
-})
+STR_STATUS = defaultdict(
+    lambda: "Unknown",
+    {
+        1: "Running",
+        8: "Waiting",
+        16: "Not started",
+    },
+)
 
-STR_ATTR = defaultdict(lambda: "??", {
-    5: "RX",
-    6: "RW",
-})
+STR_ATTR = defaultdict(
+    lambda: "??",
+    {
+        5: "RX",
+        6: "RW",
+    },
+)
 
 REG_NAMES = {
     13: "SP",
@@ -153,6 +175,7 @@ REG_NAMES = {
 # =============================================================================
 # Data structures
 # =============================================================================
+
 
 class VitaThread:
     """Represents a thread from the core dump."""
@@ -193,7 +216,7 @@ class VitaModule:
         self.segments = []
         for x in range(self.num_segs):
             sz = 0x14
-            self.segments.append(VitaModuleSegment(data[sz*x:sz*(x+1)], x + 1))
+            self.segments.append(VitaModuleSegment(data[sz * x : sz * (x + 1)], x + 1))
 
     def parse_foot(self, data):
         # ARM exception start/end (unused for now)
@@ -266,6 +289,7 @@ class Segment:
 # =============================================================================
 # ELF Parser (for the homebrew .elf file)
 # =============================================================================
+
 
 class ElfParser:
     """Parses the homebrew ELF file for symbol resolution and disassembly."""
@@ -345,7 +369,9 @@ class ElfParser:
         end = real_addr + 0x10
 
         args = [
-            "arm-vita-eabi-objdump", "-d", "-S",
+            "arm-vita-eabi-objdump",
+            "-d",
+            "-S",
             f"--start-address=0x{start:x}",
             f"--stop-address=0x{end:x}",
             self.filename,
@@ -391,6 +417,7 @@ class ElfParser:
 # Core Dump Parser
 # =============================================================================
 
+
 class CoreParser:
     """Parses a PSVita core dump (.psp2dmp) file."""
 
@@ -399,7 +426,7 @@ class CoreParser:
         # Detect gzip by magic bytes (\x1f\x8b) instead of relying on exceptions,
         # which is more reliable and avoids Python version differences.
         with open(filename, "rb") as probe:
-            is_gzip = probe.read(2) == b'\x1f\x8b'
+            is_gzip = probe.read(2) == b"\x1f\x8b"
         if is_gzip:
             f = gzip.open(filename, "rb")
         else:
@@ -440,15 +467,15 @@ class CoreParser:
         for _ in range(num):
             # Module header
             sz = 0x50
-            module = VitaModule(data[off:off+sz])
+            module = VitaModule(data[off : off + sz])
             off += sz
             # Module segments
             sz = module.num_segs * 0x14
-            module.parse_segs(data[off:off+sz])
+            module.parse_segs(data[off : off + sz])
             off += sz
             # Module footer
             sz = 0x10
-            module.parse_foot(data[off:off+sz])
+            module.parse_foot(data[off : off + sz])
             off += sz
 
             self.modules.append(module)
@@ -462,7 +489,7 @@ class CoreParser:
         off = 8
         for _ in range(num):
             sz = u32(data, off)
-            thread = VitaThread(data[off:off+sz])
+            thread = VitaThread(data[off : off + sz])
             self.threads.append(thread)
             self.tid_to_thread[thread.uid] = thread
             off += sz
@@ -476,7 +503,7 @@ class CoreParser:
         off = 8
         for _ in range(num):
             sz = u32(data, off)
-            regs = VitaRegs(data[off:off+sz])
+            regs = VitaRegs(data[off : off + sz])
             if regs.tid in self.tid_to_thread:
                 self.tid_to_thread[regs.tid].regs = regs
             off += sz
@@ -495,7 +522,7 @@ class CoreParser:
         Returns (module, segment, offset) tuple or None.
         Thumb bit is cleared before lookup to handle Thumb function pointers.
         """
-        if not hasattr(self, '_rx_ranges'):
+        if not hasattr(self, "_rx_ranges"):
             self._build_rx_ranges()
         addr_clean = addr & ~1
         for start, end, module, segment in self._rx_ranges:
@@ -516,13 +543,14 @@ class CoreParser:
         for segment in self.segments:
             if segment.vaddr <= addr < segment.vaddr + segment.size:
                 off = addr - segment.vaddr
-                return segment.data[off:off+size]
+                return segment.data[off : off + size]
         return None
 
 
 # =============================================================================
 # Main analysis logic
 # =============================================================================
+
 
 def print_module_info(module):
     """Print detailed information about a loaded module."""
@@ -566,7 +594,8 @@ def print_thread_info(core, thread, elf=None):
 
 # Matches compiler-generated data labels: .LC0, .LANCHOR1, etc.
 # Deliberately avoids matching .Lfunc_begin / .Ltext0 which are valid code labels.
-_DATA_LABEL_RE = re.compile(r'\.(LC|LANCHOR)\d+')
+_DATA_LABEL_RE = re.compile(r"\.(LC|LANCHOR)\d+")
+
 
 def _is_likely_return_addr(offset, elf):
     """Heuristic check: is this address likely a return address (i.e. instruction
@@ -764,7 +793,8 @@ def main():
         help="Path to the .elf file (not .velf, not eboot.bin). Build with -g for best results.",
     )
     parser.add_argument(
-        "-s", "--stack-size",
+        "-s",
+        "--stack-size",
         dest="stacksize",
         type=int,
         default=32,

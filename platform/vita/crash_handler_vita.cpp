@@ -110,12 +110,18 @@ static int vita_backtrace(void **buffer, int max_frames) {
 
 static const char *_get_signal_name(int sig) {
 	switch (sig) {
-		case SIGSEGV: return "SIGSEGV (Segmentation fault)";
-		case SIGFPE: return "SIGFPE (Floating-point exception)";
-		case SIGILL: return "SIGILL (Illegal instruction)";
-		case SIGABRT: return "SIGABRT (Aborted)";
-		case SIGBUS: return "SIGBUS (Bus error)";
-		default: return "Unknown signal";
+		case SIGSEGV:
+			return "SIGSEGV (Segmentation fault)";
+		case SIGFPE:
+			return "SIGFPE (Floating-point exception)";
+		case SIGILL:
+			return "SIGILL (Illegal instruction)";
+		case SIGABRT:
+			return "SIGABRT (Aborted)";
+		case SIGBUS:
+			return "SIGBUS (Bus error)";
+		default:
+			return "Unknown signal";
 	}
 }
 
