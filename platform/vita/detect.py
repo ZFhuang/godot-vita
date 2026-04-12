@@ -170,6 +170,7 @@ def configure(env):
                 "SceKernelDmacMgr_stub",
                 "SceCommonDialog_stub",
                 "taihen_stub",
+                "kubridge_stub",
                 "SceLibKernel_stub",
                 "SceKernelThreadMgr_stub",
                 "SceSblSsMgr_stub",
@@ -202,6 +203,7 @@ def configure(env):
             LIBS=[
                 "dl",
                 "taihen_stub",
+                "kubridge_stub",
                 "SceLibKernel_stub",
                 "SceKernelThreadMgr_stub",
                 "SceSblSsMgr_stub",
